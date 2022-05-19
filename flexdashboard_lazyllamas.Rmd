@@ -36,7 +36,7 @@ DT <- readRDS("data/DT.rds")
 DTL <- readRDS("data/DTL.rds")
 RAR <- readRDS(sprintf("data/RAR_%s.rds", project_label))
 DTS <- readRDS("data/DTS.rds")
-DTE <- readRDS(sprintf("data/DTE_%s.rds", project_label))
+DTE <- readRDS("data/DTE.rds")
 
 img_link <- sprintf("https://raw.githubusercontent.com/cnftstats/images/main/%s/", project_label)
 
