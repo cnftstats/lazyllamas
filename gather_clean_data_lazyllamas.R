@@ -110,7 +110,7 @@ saveRDS(DTS, file = "data/DTS.rds")
 
 # Database evolution -------------------------------------------------------------------------------
 DTE <- copy(DT)
-.file_name <- sprintf("data/DTE_%s.rds", project_label)
+.file_name <- "data/DTE.rds"
 if (file.exists(.file_name)) {
   cat("File data/DTE exists:", file.exists(.file_name), "\n")
   DTE_old <- readRDS(.file_name)
