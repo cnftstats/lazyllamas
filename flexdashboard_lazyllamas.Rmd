@@ -1,0 +1,378 @@
+---
+title: "CNFTSTATS"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    navbar:
+      - { title: "Twitter", href: "https://twitter.com/cnftstats"}
+      - { title: "About", href: "#about" }
+    social: ["menu"]
+    css: rmd_flexboard.css
+    self_contained: true
+    includes:
+      in_header: header.html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, comment = "", dev = "svglite", fig.ext = ".svg")
+
+# Libraries
+library(flexdashboard)
+library(htmlwidgets)
+library(data.table)
+library(lubridate)
+library(magrittr)
+library(ggplot2)
+library(svglite)
+library(plotly)
+library(DT)
+
+# Paramaters
+project_label <- "lazyllamas"
+
+# Data
+DT <- readRDS("data/DT.rds")
+DTL <- readRDS("data/DTL.rds")
+RAR <- readRDS(sprintf("data/RAR_%s.rds", project_label))
+DTS <- readRDS("data/DTS.rds")
+DTE <- readRDS(sprintf("data/DTE_%s.rds", project_label))
+
+img_link <- sprintf("https://raw.githubusercontent.com/cnftstats/images/main/%s/", project_label)
+
+
+# javascript (clickable datapoints url)
+# https://stackoverflow.com/questions/51681079/how-to-make-scatterplot-points-open-a-hyperlink-using-ggplotly-r
+
+js <- "function(el, x) {
+  el.on('plotly_click', function(d) {
+    var link = d.points[0].customdata;
+    window.open(link);
+  });
+}"
+
+
+# Functions
+loj <- function (X = NULL, Y = NULL, onCol = NULL) {
+  if (truelength(X) == 0 | truelength(Y) == 0) 
+    stop("setDT(X) and setDT(Y) first")
+  n <- names(Y)
+  X[Y, `:=`((n), mget(paste0("i.", n))), on = onCol]
+}
+```
+
+<!-- Add live timestamp -->
+```{r results='asis'}
+timestamp <- as.numeric(Sys.time())
+cat("
+<script>
+$(document).ready(function(){
+  $('.navbar-author').after('</br><span id=", '"updatedat"', ">Updated: <span data-livestamp=", '"', timestamp, '"', "></span></span>');
+});
+</script>
+", sep = "")
+```
+
+# Sidebar {data-width=80, .sidebar}
+<ul id="sidebar_ul">
+  <li><a href="https://cnftstats.github.io/adapes">ApeSociety</a></li>
+  <li><a href="https://cnftstats.github.io/bcrc">BCRC</a></li>
+  <li><a href="https://cnftstats.github.io/bossplanet">BossPlanet</a></li>
+  <li><a href="https://cnftstats.github.io/cabins">Cabins</a></li>
+  <li><a href="https://cnftstats.github.io/chilledkongs">ChilledKongs</a></li>
+  <li><a href="https://cnftstats.github.io/claynation">Clay Nation</a></li>
+  <li><a href="https://cnftstats.github.io/discosolaris">DiscoSolaris</a></li>
+  <li id="currentProject"><a href="https://cnftstats.github.io/lazyllamas">LazyLlamas</a></li>
+  <li><a href="https://cnftstats.github.io/mocossi">Mocossi</a></li>
+  <li><a href="https://cnftstats.github.io/pavia">Pavia</a></li>
+  <li><a href="https://cnftstats.github.io/spacebudz">SpaceBudz</a></li>
+  <li><a href="https://cnftstats.github.io/vox">VoxCats</a></li>
+</ul>
+
+# Floor {data-icon="ion-arrow-graph-up-right"}
+## Column 1 {data-width=700 .tabset}
+### Listings staircase
+```{r, fig.width=9, fig.height=7}
+X <- copy(DT)
+X <- X[order(price)][1:100]
+X[, cnft := 1:nrow(X)]
+
+X[, img := paste0(img_link, asset_id, "_large.png")]
+
+X[, asset_traits_nice := gsub(":", ": ", gsub(" — ", "</br>", asset_traits))]
+
+X[, custom_data := sprintf('{
+"mytooltip":"<div id=\'tooltip\' style=\'color:#9e9e9e; font-size:13px; background-color:white\'>
+              <img src=\'%s\' width=190></img>
+              </br><span style=\'color:#7d188f\'><b>%s</b></span>
+              </br><b>%.0f ada</b>
+              </br></br>%s
+             </div>",
+"market_link":"%s"
+}', img, asset, price, asset_traits_nice, link) %>% gsub("\n", "", .)]
+
+min_y <- min(X$price) - min(X$price)*.01
+max_y <- max(X$price) + min(X$price)*.01
+
+gg <- ggplot(X, aes(cnft, price, customdata = custom_data,
+                    text = paste0(asset,
+                                  "</br></br>", paste("Price:", round(price, 0))))) +
+  geom_point(color = "steelblue3", size = 2) +
+  # geom_line(color = "steelblue3", size = 1) +s
+  # geom_ribbon(aes(ymin = min_y, ymax = price), fill = "steelblue3", alpha = .5) +
+  scale_y_continuous(n.breaks = 10, expand = c(0, 0)) +
+  scale_x_continuous(breaks = c(1, seq(10, 90, 10), 100), expand = c(.03, .03)) +
+  coord_cartesian(ylim = c(min_y, max_y)) +
+  labs(y = "Listing price", x = "100 cheapest assets")
+
+ggplotly(gg, tooltip = "text") %>% 
+  layout(legend = list(x = 1, y = 0, bgcolor = 'rgba(255,255,255,0.6)'),
+         margin = list(r = 200)) %>%
+  config(scrollZoom = TRUE, displaylogo = FALSE) %>% 
+  onRender(readLines("hover_tooltip.js"))
+```
+
+### Listings
+```{r, fig.width=9, fig.height=7}
+# Is there enough data?
+.hours_ago <- 12
+.data_dates <- DTE[order(data_date), unique(data_date)]
+.data_date_now <- .data_dates[length(.data_dates)]
+.data_date_after <- .data_dates[!(.data_dates %in% .data_date_now)]
+.data_date_after_hours <- difftime(.data_date_now, .data_date_after, units = "hours")
+.enoughData <- ifelse(all(.data_date_after_hours < .hours_ago), FALSE, TRUE)
+
+# Find data date collection closest to one hour after the first data collection
+.data_date_next <- .data_date_after[which.min(abs(.data_date_after_hours - .hours_ago))]
+.diff_minutes_now_next <- difftime(.data_date_now, .data_date_next, units = "mins")
+
+# Plot
+X <- DTE[data_date %in% c(.data_date_now, .data_date_next)]
+X[, data_when := fcase(
+  data_date == .data_date_now, "Now",
+  data_date == .data_date_next, sprintf("About %sh ago", .hours_ago)
+)]
+
+data_when_order <- X[order(-data_date), unique(data_when)]
+X[, data_when := factor(data_when, levels = data_when_order)]
+
+X[price %between% c(0, 499),     price_range := trunc(price/50)*50]
+X[price %between% c(500, 999),   price_range := trunc(price/100)*100]
+X[price %between% c(1000, 9999), price_range := trunc(price/1000)*1000]
+X[price >= 10000,                price_range := 10000]
+
+CAP <- X[, .(floor = min(price), listings = .N), data_when]
+.caption <- paste0(
+  sprintf("Now: Floor = %s | Listings = %s", CAP[1, floor], CAP[1, listings]),
+  sprintf("\n%sh ago: Floor = %s | Listings = %s", .hours_ago, CAP[2, floor], CAP[2, listings]),
+  "\nSource: https://cnftstats.github.io/"
+)
+
+
+X <- X[, .N, .(price_range, data_when)][order(price_range)]
+X[price_range %between% c(0, 499),     x_label := paste0(price_range, "-", price_range + (50-1))]
+X[price_range %between% c(500, 999),   x_label := paste0(price_range, "-", price_range + (100-1))]
+X[price_range %between% c(1000, 9999), x_label := paste0(price_range, "-", price_range + (1000-1))]
+X[price_range >= 10000,                x_label := "10000+"]
+
+.X <- X[, .(price_range, x_label)] %>% unique %>% .[order(price_range)]
+X[, x_label := factor(x_label, levels = .X$x_label)]
+
+ggplot(X, aes(x_label, N, alpha = data_when)) +
+  facet_grid(data_when~.) +
+  geom_bar(stat = "identity", fill = "steelblue4") +
+  geom_text(aes(label = stat(y), group = x_label),
+            stat = 'summary', fun = sum, vjust = -.5, hjust = +.55,
+            color = "steelblue4", size = 3) +
+  scale_y_continuous(expand = expansion(mult = c(0, .1))) +
+  scale_alpha_manual(values = c(0.9, 0.7), guide = "none") +
+  labs(x = "Price range", y = "Number of listings", fill = "", caption = .caption) +
+  theme(axis.text.x = element_text(angle = -45, vjust = +.5, hjust = 0,
+                                   color = "grey50", size = 8),
+        axis.text.y = element_text(color = "grey50", size = 8),
+        axis.title = element_text(color = "grey30", size = 10),
+        legend.position = "bottom", legend.justification = 'right', legend.direction = "horizontal",
+        legend.text = element_text(color = "grey50", size = 9),
+        legend.key.height = unit(0.5, "points"), legend.key.width = unit(10, "points"),
+        legend.box.spacing = unit(-10, "points"),
+        plot.caption = element_text(color = "#008B8B", vjust = +15, hjust = 0, size = 8),
+        plot.margin = unit(c(0, 15, 0, 0), units = "pt"))
+```
+
+### Sales
+```{r fig.height=8, fig.width=10}
+X <- copy(DTS)
+X[, sold_time := trunc(sold_at_days)]
+X[, sold_time := fcase(trunc(sold_at_days) == 0, "0-24h ago",
+                       trunc(sold_at_days) == 1, "24-48h ago",
+                       trunc(sold_at_days) == 2, "48-72h ago")]
+X[price %between% c(0, 499),     price_range := trunc(price/50)*50]
+X[price %between% c(500, 999),   price_range := trunc(price/100)*100]
+X[price %between% c(1000, 9999), price_range := trunc(price/1000)*1000]
+X[price >= 10000,                price_range := 10000]
+
+CAP <- X[, .(sale_range = sprintf("%s-%s", min(price), max(price)),
+             sales = .N, volume = sum(price)/1000), sold_time]
+.caption <- paste0(sprintf("0-24h ago: Sales = %s | Volume = %.0fk", CAP[1, sales], CAP[1, volume]),
+                   sprintf("\n24-48h ago: Sales = %s | Volume = %.0fk", CAP[2, sales], CAP[2, volume]),
+                   sprintf("\n48-72h ago: Sales = %s | Volume = %.0fk",CAP[3, sales], CAP[3, volume]),
+                   "\nSource: https://cnftstats.github.io/")
+
+X <- X[, .N, .(price_range, sold_time)][order(price_range)]
+X[price_range %between% c(0, 499),     x_label := paste0(price_range, "-", price_range + (50-1))]
+X[price_range %between% c(500, 999),   x_label := paste0(price_range, "-", price_range + (100-1))]
+X[price_range %between% c(1000, 9999), x_label := paste0(price_range, "-", price_range + (1000-1))]
+X[price_range >= 10000,                x_label := "10000+"]
+
+.X <- X[, .(price_range, x_label)] %>% unique %>% .[order(price_range)]
+X[, x_label := factor(x_label, levels = .X$x_label)]
+
+ggplot(X, aes(x_label, N, alpha = sold_time)) +
+  facet_grid(sold_time~.) +
+  geom_hline(yintercept = 0, color = "grey70") +
+  geom_bar(stat = "identity", fill = "springgreen4") +
+  geom_text(aes(label = stat(y), group = x_label),
+            stat = 'summary', fun = sum, vjust = -.5, hjust = +.55,
+            color = "springgreen4", size = 3) +
+  scale_y_continuous(expand = expansion(mult = c(0, .1))) +
+  scale_alpha_manual(values = c("0-24h ago" = .9, "24-48h ago" = .8, "48-72h ago" = .7), guide = "none") +
+  labs(x = "Price range", y = "Number of sales", fill = "",
+       caption = .caption) +
+  theme(axis.text.x = element_text(angle = -45, vjust = +.5, hjust = 0,
+                                   color = "grey50", size = 8),
+        axis.text.y = element_text(color = "grey50", size = 8),
+        axis.title = element_text(color = "grey30", size = 10),
+        legend.position = "bottom", legend.justification = 'right', legend.direction = "horizontal",
+        legend.text = element_text(color = "grey50", size = 9),
+        legend.key.height = unit(0.5, "points"), legend.key.width = unit(10, "points"),
+        legend.box.spacing = unit(-10, "points"),
+        plot.caption = element_text(color = "#008B8B", vjust = +17, hjust = 0, size = 9),
+        # plot.margin = unit(c(0, 15, 0, 0), units = "pt"),
+        panel.spacing.y = unit(1, "lines"))
+```
+
+
+## Column 2 {data-width=300}
+### Sweep that floor: Lowest listings
+```{r}
+X <- DT[order(price)][1:15]
+X[, img := sprintf('<img src="%s%s.png" class="img_html">', img_link, asset_id)]
+X[, img := sprintf('<a href="%s" target="_blank">%s</br>#%s</a>', link, img, asset_number)]
+
+X <- X[, .(img, price, asset_traits)]
+
+
+datatable(X, class = 'compact stripe hover',
+          options = list(dom = "t",
+                         pageLength = 100,
+                         scrollY = '100%',
+                         bLengthChange = FALSE,
+                         bPaginate = FALSE,
+                         info = FALSE,
+                         columnDefs = list(list(className = 'dt-right', targets = "_all"))),
+          colnames = c("Asset", "Price", "Traits"),
+          rownames = FALSE,
+          escape = FALSE) %>%
+  formatStyle(columns = 1:ncol(X), fontSize = '90%')
+```
+
+> Click on the image to open the listing.
+
+# Rank {data-icon="fa-signal"}
+## Column 1
+Ranking is not available for this collection.
+
+# Traits {data-icon="ion-android-color-palette"}
+## Column 1 {data-width=400}
+### Floor listings by trait
+```{r}
+X <- DTL[, .SD[price == min(price)], .(trait_category, trait)][order(trait_category, trait)]
+X[, img := sprintf('<img src="%s%s.png" class="img_html">', img_link, asset_id)]
+X[, img := sprintf('<a href="%s" target="_blank">%s</br>#%s</a>', link, img, asset_number)]
+
+X <- X[, .(trait_category, trait, img, price, asset_traits)]
+
+X <- X[order(-price)]
+
+datatable(X, class = 'compact stripe hover',
+          options = list(dom = "t",
+                         pageLength = 100,
+                         scrollY = '100%',
+                         bLengthChange = FALSE,
+                         bPaginate = FALSE,
+                         info = FALSE,
+                         columnDefs = list(list(className = 'dt-right', targets = "_all"))),
+          colnames = c("Trait</br>category", "Trait", "Asset", "Price", "Traits"),
+          filter = "top",
+          rownames = FALSE,
+          escape = FALSE) %>%
+  formatStyle(columns = 1:ncol(X), fontSize = '90%')
+```
+
+# Search {data-icon="ion-android-search"}
+## Column 1
+### Find your NFT
+```{r}
+# ion-information-circled
+X <- RAR[, .(asset_name, asset_traits)]
+datatable(X, class = 'compact stripe hover',
+          options = list(pageLength = 30,
+                         scrollY = '100%',
+                         bLengthChange = FALSE,
+                         bPaginate = TRUE,
+                         info = TRUE,
+                         columnDefs = list(list(className = 'dt-right', targets = "_all"))),
+          colnames = c("Asset", "Traits"),
+          rownames = FALSE,
+          escape = FALSE) %>%
+  formatStyle(columns = 1:ncol(X), fontSize = '90%')
+```
+
+> Use the search box to look for your NFT. For example, search `#3000`.
+
+# Buy me a coffee {data-icon="ion-coffee"}
+## Column 1
+### Thanks for your support!
+Tips would be greatly appreciated! This would encourage me to maintain and improve the website (for instance, to get a better hosting service).  
+
+![Tip me](tipme.svg){width=200px}  
+**addr1qx04gwr9kazlpnm6t8a8h0pggk440zs3fdayct732a0wwwd3usryhnh52pevj5xy7cgp9d4jnywar6g0tnct58dyfukszl25n8** 
+
+# about {.hidden}
+## Columun 1
+### About the website
+#### The data
+- Listings data is comes from <a href="https://cnft.io/" target="_blank">cnft.io</a>, <a href="https://www.jpg.store/" target="_blank">jpg.store</a>and <a href="https://www.spacebudz.io/" target="_blank">spacebudz.io</a> marketplaces
+- Rank and rarity scores come from <a href="https://cnft.tools/" target="_blank">cnft.tools</a>.
+- The website is updated every ~10mins. You need to hit `F5` to manually see the updates on the website.
+
+#### Disclaimer
+- This is an early version, so there might be some bugs! Use at your own risk
+
+## Columun 2
+### Other useful websites
+#### Official websites
+- <a href="https://bosscatrocketclub.com/" target="_blank">bosscatrocketclub.com</a>
+- <a href="https://chilledkongs.com/" target="_blank">chilledkongs.com</a>
+- <a href="https://mocossi.com/" target="_blank">mocossi.com</a>
+- <a href="https://spaceapeclub.io/" target="_blank">spaceapeclub.io</a>
+- <a href="https://www.pavia.io/" target="_blank">pavia.io</a>
+
+#### General tools
+- <a href="https://opencnft.io/" target="_blank">opencnft.io</a>
+- <a href="https://cnft.tools/" target="_blank">cnft.tools</a>
+- <a href="https://www.cnftjungle.io/" target="_blank">cnftjungle.io</a>
+- <a href="https://www.belowfloor.io/" target="_blank">belowfloor.io</a>
+
+#### Specific tools
+- <a href="https://pavia.3dkiwi.io/" target="_blank">Pavia heatmap</a>
+
+
+## Column 3
+### About me
+- I am passionate about crypto, (c)nfts, stats, and programming!
+- Hit me on discord: <a href="https://discord.com/users/K2#8332/" target="_blank">K2#8332</a>
+- Follow me on Twitter: <a href="https://twitter.com/cnftstats" target="_blank">@cnftstats</a>
+
+<!-- https://ionic.io/ionicons/v2/cheatsheet.html -->
+<!-- https://www.qrcode-monkey.com/#text -->
